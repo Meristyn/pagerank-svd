@@ -83,6 +83,15 @@ def calc_iters_teoricas(alpha: float, tol: float) -> int:
 def measure_solver(fn: Callable[[], Any], repeats: int) -> tuple[Any, float, int]:
     """Mide tiempo medio (perf_counter) y memoria pico (tracemalloc) solo del solver.
 
+    Nota sobre ``tracemalloc``
+    --------------------------
+    ``tracemalloc`` rastrea únicamente las asignaciones gestionadas por el
+    asignador de memoria de Python (incluidos los arreglos NumPy creados desde
+    Python), pero **no ve el workspace interno** reservado directamente en
+    C/Fortran por rutinas de LAPACK (en ``pinv``/``svd``) ni por ARPACK (en
+    ``svds``). Por ello, ``peak_mem_bytes`` debe interpretarse como una cota
+    inferior de la memoria temporal del solver.
+
     Parámetros
     ----------
     fn : Callable[[], Any]
@@ -178,7 +187,7 @@ def _run_svds_safe(
             repeats=repeats,
         )
         return pi, mean_t, peak_m, "ok"
-    except (spla.ArpackNoConvergence, spla.ArpackError, Exception) as exc:
+    except (spla.ArpackNoConvergence, spla.ArpackError) as exc:
         warnings.warn(
             f"svds falló (n={M_sp.shape[0]}, alpha={alpha}, k={k}, which={which}): {exc}",
             RuntimeWarning,
@@ -306,6 +315,22 @@ def _evaluate_graph_f(
             )
         )
 
+        # 6. SVD truncada dispersa (svds, SM, k=1).
+        pi_svds_sm, t_svds_sm, m_svds_sm, st_svds_sm = _run_svds_safe(
+            M_sp, alpha, k=K_SM, which="SM", seed=seed, repeats=REPEATS_F
+        )
+        diff_svds_sm = (
+            float(np.linalg.norm(pi_svds_sm - pi_ref, ord=1))
+            if pi_svds_sm is not None
+            else ""
+        )
+        rows_f.append(
+            _make_row(
+                graph_kind, n, alpha, "svds_sm", K_SM, seed, "none",
+                t_svds_sm, m_svds_sm, diff_svds_sm, "", "", dangling, bytes_M_sp, st_svds_sm, ref_label,
+            )
+        )
+
         # Comparación adicional contra pinv cuando n <= MAX_N_DENSE.
         if n <= MAX_N_DENSE and pi_pinv is not None:
             for m_name, pi_vec, k_val in (
@@ -314,6 +339,7 @@ def _evaluate_graph_f(
                 ("power_implicit", pi_imp, ""),
                 ("svd_trunc_lm", pi_svd_lm, K_LM),
                 ("svds_lm", pi_svds_lm, K_LM),
+                ("svds_sm", pi_svds_sm, K_SM),
             ):
                 if pi_vec is None:
                     continue
@@ -523,7 +549,13 @@ def run_task_g() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
 
 def fit_empirical_exponents(rows_f: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Ajusta exponentes empíricos np.polyfit(log(n), log(t), 1) solo para n >= 500."""
+    """Ajusta exponentes empíricos np.polyfit(log(n), log(t), 1) solo para n >= 500.
+
+    Marca como ``"poco fiable"`` los ajustes basados en 3 o menos puntos y agrega,
+    para los métodos densos (``pinv`` y ``svd_trunc_lm``), una fila resumen
+    agrupada por ``graph_kind`` con el rango de exponentes observados entre los
+    distintos valores de ``alpha``.
+    """
     grouped: dict[tuple[str, float, str], list[tuple[int, float]]] = defaultdict(list)
     for r in rows_f:
         if r["status"] != "ok" or r["graph_kind"] == "snap":
@@ -543,6 +575,7 @@ def fit_empirical_exponents(rows_f: list[dict[str, Any]]) -> list[dict[str, Any]
         ns = np.array([p[0] for p in pairs], dtype=np.float64)
         ts = np.array([p[1] for p in pairs], dtype=np.float64)
         slope, intercept = np.polyfit(np.log(ns), np.log(ts), 1)
+        fiabilidad = "poco fiable" if len(pairs) <= 3 else "ok"
         exponents.append(
             {
                 "graph_kind": gkind,
@@ -552,8 +585,38 @@ def fit_empirical_exponents(rows_f: list[dict[str, Any]]) -> list[dict[str, Any]
                 "n_points": len(pairs),
                 "exponent": float(slope),
                 "intercept": float(intercept),
+                "rango_exponentes": "",
+                "fiabilidad": fiabilidad,
             }
         )
+
+    # Fila agrupada por graph_kind para métodos densos (pinv y svd_trunc_lm).
+    dense_summary_rows: list[dict[str, Any]] = []
+    for gkind in sorted({e["graph_kind"] for e in exponents}):
+        for method in ("pinv", "svd_trunc_lm"):
+            sub = [
+                e for e in exponents
+                if e["graph_kind"] == gkind and e["method"] == method
+            ]
+            if not sub:
+                continue
+            exp_vals = [float(e["exponent"]) for e in sub]
+            min_pts = min(int(e["n_points"]) for e in sub)
+            dense_summary_rows.append(
+                {
+                    "graph_kind": gkind,
+                    "alpha": "agrupado",
+                    "method": method,
+                    "n_range": sub[0]["n_range"],
+                    "n_points": min_pts,
+                    "exponent": float(np.mean(exp_vals)),
+                    "intercept": "",
+                    "rango_exponentes": f"[{min(exp_vals):.3f}, {max(exp_vals):.3f}]",
+                    "fiabilidad": "poco fiable" if min_pts <= 3 else "ok",
+                }
+            )
+
+    exponents.extend(dense_summary_rows)
     return exponents
 
 
@@ -565,15 +628,18 @@ def plot_time_vs_n(
 ) -> None:
     """Genera la gráfica tiempo vs. n en escala log-log."""
     exp_map = {
-        (e["graph_kind"], e["alpha"], e["method"]): e["exponent"] for e in exponents
+        (e["graph_kind"], e["alpha"], e["method"]): e["exponent"]
+        for e in exponents
+        if e["alpha"] != "agrupado"
     }
-    methods = ["power", "power_implicit", "pinv", "svd_trunc_lm", "svds_lm"]
+    methods = ["power", "power_implicit", "pinv", "svd_trunc_lm", "svds_lm", "svds_sm"]
     labels = {
         "power": "Potencia (S explícita)",
         "power_implicit": "Potencia implícita (A, d)",
         "pinv": "pinv (densa)",
         "svd_trunc_lm": f"SVD trunc. LM (k={K_LM})",
         "svds_lm": f"svds LM (k={K_LM})",
+        "svds_sm": f"svds SM (k={K_SM})",
     }
     markers = {
         "power": "o",
@@ -581,6 +647,7 @@ def plot_time_vs_n(
         "pinv": "^",
         "svd_trunc_lm": "D",
         "svds_lm": "v",
+        "svds_sm": "P",
     }
 
     fig, axes = plt.subplots(2, len(ALPHAS_F), figsize=(15, 9), sharex=True, sharey=True)
@@ -650,13 +717,14 @@ def plot_time_vs_n(
 def plot_memory_vs_n(rows_f: list[dict[str, Any]], out_path: Path, full: bool) -> None:
     """Genera la gráfica de memoria total (solver + matrix_bytes) vs. n en escala log-log."""
     alpha_plot = 0.99
-    methods = ["power", "power_implicit", "pinv", "svd_trunc_lm", "svds_lm"]
+    methods = ["power", "power_implicit", "pinv", "svd_trunc_lm", "svds_lm", "svds_sm"]
     labels = {
         "power": "Potencia explícita (solver + S)",
         "power_implicit": "Potencia implícita (solver + A, d)",
         "pinv": "pinv (solver + M densa)",
         "svd_trunc_lm": f"SVD trunc. LM k={K_LM} (solver + M densa)",
         "svds_lm": f"svds LM k={K_LM} (solver + M dispersa)",
+        "svds_sm": f"svds SM k={K_SM} (solver + M dispersa)",
     }
     markers = {
         "power": "o",
@@ -664,6 +732,7 @@ def plot_memory_vs_n(rows_f: list[dict[str, Any]], out_path: Path, full: bool) -
         "pinv": "^",
         "svd_trunc_lm": "D",
         "svds_lm": "v",
+        "svds_sm": "P",
     }
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5.5), sharex=True, sharey=True)
@@ -881,12 +950,17 @@ def print_console_summary(
                 )
 
         print("\n=== EXPONENTES EMPÍRICOS np.polyfit(log(n), log(t), 1) — SOLO n >= 500 ===")
-        print(f"{'grafo':<6} {'alpha':<7} {'metodo':<15} {'rango_n':<12} {'pts':>3} {'exponente':>10} {'vs_O(n^3)':>10}")
+        print(
+            f"{'grafo':<6} {'alpha':<9} {'metodo':<15} {'rango_n':<10} {'pts':>3} "
+            f"{'exponente':>10} {'vs_O(n^3)':>10} {'rango_exp':<16} {'fiabilidad':<12}"
+        )
         for e in exponents:
-            delta_n3 = e["exponent"] - 3.0
+            alpha_str = f"{e['alpha']:.3f}" if isinstance(e["alpha"], float) else str(e["alpha"])
+            delta_n3 = float(e["exponent"]) - 3.0
             print(
-                f"{e['graph_kind']:<6} {e['alpha']:<7.3f} {e['method']:<15} "
-                f"{e['n_range']:<12} {e['n_points']:>3d} {e['exponent']:>10.3f} {delta_n3:>+10.3f}"
+                f"{e['graph_kind']:<6} {alpha_str:<9} {e['method']:<15} "
+                f"{e['n_range']:<10} {e['n_points']:>3d} {float(e['exponent']):>10.3f} "
+                f"{delta_n3:>+10.3f} {e['rango_exponentes']:<16} {e['fiabilidad']:<12}"
             )
 
     if rows_g:
@@ -994,7 +1068,17 @@ def main() -> None:
         if exponents:
             _save_csv(
                 RESULTADOS_DIR / "exponentes_empiricos_f.csv",
-                ["graph_kind", "alpha", "method", "n_range", "n_points", "exponent", "intercept"],
+                [
+                    "graph_kind",
+                    "alpha",
+                    "method",
+                    "n_range",
+                    "n_points",
+                    "exponent",
+                    "intercept",
+                    "rango_exponentes",
+                    "fiabilidad",
+                ],
                 exponents,
             )
         plot_time_vs_n(rows_f, exponents, RESULTADOS_DIR / "f_tiempo_vs_n.png", full=args.full)
