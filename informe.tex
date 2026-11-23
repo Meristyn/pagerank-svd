@@ -1,16 +1,8 @@
-% =====================================================================
-%  Control 2 - Ejercicio 4: PageRank via SVD
-%  Compilar con:  pdflatex informe.tex  (dos veces, para las referencias)
-%  Antes de entregar: buscar "PENDIENTE" (texto rojo) y resolver todos.
-%  Las figuras se leen de resultados/ y resultados/p2/ (si faltan,
-%  aparece un recuadro gris con el nombre del archivo).
-% =====================================================================
 \documentclass[11pt,a4paper]{article}
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
-% Si babel-spanish esta instalado se usa; si no, se ajustan los titulos a mano.
 \IfFileExists{spanish.ldf}{%
   \usepackage[spanish,es-noshorthands,es-nodecimaldot]{babel}}{%
   \renewcommand{\figurename}{Figura}\renewcommand{\tablename}{Tabla}%
@@ -35,127 +27,94 @@
 \setcounter{totalnumber}{6}
 
 \captionsetup{font=small,labelfont=bf}
-\setlength{\parskip}{3pt}
+\setlength{\parskip}{4pt}
 \setlength{\parindent}{0pt}
 \setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
 \setlength{\floatsep}{6pt plus 2pt minus 2pt}
 \setlength{\intextsep}{6pt plus 2pt minus 2pt}
 
 % ---------- atajos ----------
-\newcommand{\todo}[1]{\textcolor{red}{\textbf{[PENDIENTE: #1]}}}
 \newcommand{\code}[1]{\texttt{\detokenize{#1}}}
 \newcommand{\norm}[1]{\left\lVert #1\right\rVert}
 \newcommand{\e}{\mathbf{e}}
 \newcommand{\bb}{\mathbf{b}}
 \newcommand{\bx}{\mathbf{x}}
 \newcommand{\pib}{\boldsymbol{\pi}}
-\newcommand{\img}[3]{%  archivo, ancho, alto maximo
+\newcommand{\img}[3]{%
   \IfFileExists{#1}{\includegraphics[width=#2,height=#3,keepaspectratio]{#1}}{%
     \fbox{\parbox[c][#3][c]{#2}{\centering\small\color{gray}Falta figura\\\texttt{\detokenize{#1}}}}}}
 
 \title{PageRank v\'ia SVD: \textquestiondown qu\'e m\'etodo conviene cuando $\alpha\to 1$?\\[2pt]
 \large Control 2 -- Ejercicio 4}
-\author{María Belén Calle Pinto\and Renato Oscar Corrales Peña\\[2pt]
-  Matemática Aplicada a la Computación \quad Repositorio: https://github.com/Meristyn/pagerank-svd}
+\author{Mar\'ia Bel\'en Calle Pinto \and Renato Oscar Corrales Pe\~na\\[2pt]
+  Matem\'atica Aplicada a la Computaci\'on \\
+  Repositorio: \texttt{https://github.com/Meristyn/pagerank-svd}}
 \date{\today}
 
 \begin{document}
 \maketitle
 
-\begin{abstract}
-\noindent Comparamos cuatro formas de calcular el vector de PageRank como soluci\'on del sistema
-$M_\alpha\bx=\frac{1-\alpha}{n}\e$: m\'etodo de la potencia, soluci\'on con pseudoinversa, pseudoinversa truncada
-(SVD densa) y SVD truncada dispersa (\code{svds}). Usamos grafos Erd\H{o}s--R\'enyi y Barab\'asi--Albert
-($n\le 5000$) y un subgrafo de \code{web-Stanford}. Mostramos que $\sigma_{\min}(M_\alpha)\le(1-\alpha)/(\sqrt n\,\norm{\pib}_2)$,
-que en la pr\'actica se cumple casi con igualdad, y que la truncaci\'on cl\'asica (conservar los $k$ valores singulares
-mayores) falla con $k<n$, mientras que conservar el menor ($k=1$) reproduce el ranking con un error $\sim(1-\alpha)^{1.94}$.
-En grafos aleatorios la potencia gana en tiempo y precisi\'on; en el grafo real se acerca a su cota de iteraciones.
-\end{abstract}
-
 %---------------------------------------------------------------------
 \section{Introducci\'on}
-Sea $\mathcal G=(V,E)$ un grafo dirigido con $n$ nodos, $A_{ij}=1$ si existe el enlace $j\to i$, $d_j$ el grado de salida
-de $j$ y $D=\{j:d_j=0\}$ los nodos sin salida. Definimos $S=A\,\mathrm{diag}(d)^{-1}$ con las columnas de $D$ sustituidas por
-$\frac1n\e$ (as\'i $S$ es estoc\'astica por columnas), $M_\alpha=I-\alpha S$, $\bb=\frac{1-\alpha}{n}\e$, y
-$\pib=\bx/\norm{\bx}_1$ con $M_\alpha\bx=\bb$. Como $\e^\top S=\e^\top$, se tiene $\e^\top M_\alpha=(1-\alpha)\e^\top$ y por
-tanto $\e^\top\bx=1$: la normalizaci\'on es innecesaria para el sistema exacto, pero s\'i importa para $\bx_k$ truncado.
+Dado un grafo dirigido $\mathcal G=(V,E)$ con $n$ nodos, sea $A_{ij}=1$ si existe el enlace $j\to i$, $d_j$ el grado de salida de $j$ y $D=\{j:d_j=0\}$ el conjunto de nodos sin salida. Construimos la matriz estoc\'astica por columnas $S=A\,\mathrm{diag}(d)^{-1}$ reemplazando cada columna de $D$ por $\frac1n\e$. A partir de ah\'i definimos $M_\alpha=I-\alpha S$, $\bb=\frac{1-\alpha}{n}\e$ y el vector de PageRank $\pib=\bx/\norm{\bx}_1$ donde $M_\alpha\bx=\bb$. Como $\e^\top S=\e^\top$, se cumple $\e^\top M_\alpha=(1-\alpha)\e^\top$ y eso fuerza $\e^\top\bx=1$. En el sistema exacto normalizar no cambia nada, pero cuando truncamos la soluci\'on a $\bx_k$ s\'i hace falta.
 
-La pregunta es qu\'e m\'etodo ofrece el mejor compromiso entre tiempo, memoria y fidelidad del ranking cuando
-$\alpha\to1$, y c\'omo dependen de $\sigma_{\min}(M_\alpha)$, $\kappa_2(M_\alpha)$ y del $k$ necesario de la estructura del grafo.
+El objetivo es ver qu\'e m\'etodo funciona mejor en tiempo, memoria y calidad del ranking conforme $\alpha\to 1$, y entender c\'omo influye la estructura del grafo en $\sigma_{\min}(M_\alpha)$, $\kappa_2(M_\alpha)$ y el valor de $k$ que necesita la truncaci\'on.
 
 %---------------------------------------------------------------------
 \section{M\'etodos y resultado te\'orico}
 \subsection{Los cuatro m\'etodos}
-Sea $M_\alpha=U\Sigma V^\top$ con $\sigma_1\ge\dots\ge\sigma_n$.
-\begin{enumerate}\setlength{\itemsep}{1pt}
- \item \textbf{Potencia.} $\bx^{(t+1)}=\alpha S\bx^{(t)}+\bb$, con parada $\norm{\bx^{(t+1)}-\bx^{(t)}}_1<\mathrm{tol}$. El error se
- contrae por $\alpha$, as\'i que $\lceil\log(\mathrm{tol})/\log\alpha\rceil$ es una \emph{cota de peor caso} de iteraciones
- (171, 2750 y 27\,618 para $\alpha=0.85,0.99,0.999$ y $\mathrm{tol}=10^{-12}$). Implementamos $S$ expl\'icita (dispersa) y una variante
- \emph{impl\'icita}, $S\bx=A(\bx/\mathbf d)+\tfrac1n\e\sum_{j\in D}x_j$, que evita almacenar las columnas $\frac1n\e$: con una
- fracci\'on fija de nodos sin salida, $\mathrm{nnz}(S)=|E|+|D|\,n$ crece como $n^2$.
- \item \textbf{Soluci\'on con \code{numpy.linalg.pinv}:} $\bx=M_\alpha^{+}\bb$; tiempo $O(n^3)$ y memoria $O(n^2)$.
- \item \textbf{Pseudoinversa truncada (SVD densa):} $\bx_k=\sum_{i=1}^{k}\sigma_i^{-1}\mathbf v_i(\mathbf u_i^\top\bb)$ (modo \emph{LM}, los $k$
- mayores, como en el enunciado) y la variante \emph{SM}, que conserva los $k$ \emph{menores}; luego $\pib_k=\bx_k/\norm{\bx_k}_1$.
- \item \textbf{SVD truncada dispersa:} \code{scipy.sparse.linalg.svds} (ARPACK), que exige $0<k<n$ y devuelve los $\sigma_i$ en orden creciente
- (se reordenan).
+Escribimos la descomposici\'on en valores singulares como $M_\alpha=U\Sigma V^\top$ con $\sigma_1\ge\dots\ge\sigma_n$. Comparamos cuatro implementaciones:
+\begin{enumerate}\setlength{\itemsep}{2pt}
+ \item \textbf{M\'etodo de la potencia.} Itera $\bx^{(t+1)}=\alpha S\bx^{(t)}+\bb$ hasta que $\norm{\bx^{(t+1)}-\bx^{(t)}}_1<\mathrm{tol}$. Como el error se reduce por un factor $\alpha$ en cada paso, $\lceil\log(\mathrm{tol})/\log\alpha\rceil$ da una cota de peor caso (171, 2750 y 27\,618 iteraciones para $\alpha=0.85, 0.99, 0.999$ con $\mathrm{tol}=10^{-12}$). Probamos tanto $S$ expl\'icita (en formato disperso) como una versi\'on impl\'icita, $S\bx=A(\bx/\mathbf d)+\tfrac1n\e\sum_{j\in D}x_j$, que evita guardar las columnas $\frac1n\e$. Sin ese truco, si una fracci\'on fija de nodos no tiene salida, $\mathrm{nnz}(S)=|E|+|D|\,n$ acaba creciendo como $n^2$.
+ \item \textbf{Pseudoinversa directa (\code{numpy.linalg.pinv}).} Calcula $\bx=M_\alpha^{+}\bb$, con costo $O(n^3)$ en tiempo y $O(n^2)$ en memoria.
+ \item \textbf{Pseudoinversa truncada (SVD densa).} Calcula $\bx_k=\sum_{i=1}^{k}\sigma_i^{-1}\mathbf v_i(\mathbf u_i^\top\bb)$ usando los $k$ valores singulares mayores (modo \emph{LM}, que es el que pide el enunciado) y tambi\'en la variante \emph{SM}, que conserva los $k$ menores. Luego normaliza $\pib_k=\bx_k/\norm{\bx_k}_1$.
+ \item \textbf{SVD truncada dispersa (\code{scipy.sparse.linalg.svds}).} Usa ARPACK, pide $0<k<n$ y devuelve los valores singulares en orden creciente, as\'i que se reordenan antes de armar la soluci\'on.
 \end{enumerate}
 
 \subsection{Cota para $\sigma_{\min}$ y consecuencia para la truncaci\'on}
 \textbf{Proposici\'on.} $\sigma_{\min}(M_\alpha)\le\dfrac{1-\alpha}{\sqrt n\,\norm{\pib}_2}\le 1-\alpha$.
 
-\emph{Demostraci\'on.} Como $M_\alpha\pib=\bb$, $\norm{M_\alpha\pib}_2=\norm{\bb}_2=(1-\alpha)/\sqrt n$, y
-$\sigma_{\min}\le\norm{M_\alpha\pib}_2/\norm{\pib}_2$. Adem\'as $\norm{\pib}_2\ge\norm{\pib}_1/\sqrt n=1/\sqrt n$ (Cauchy--Schwarz). \hfill$\square$
+\emph{Demostraci\'on.} Como $M_\alpha\pib=\bb$, tenemos $\norm{M_\alpha\pib}_2=\norm{\bb}_2=(1-\alpha)/\sqrt n$, de donde sale $\sigma_{\min}\le\norm{M_\alpha\pib}_2/\norm{\pib}_2$. La segunda desigualdad viene de Cauchy--Schwarz: $\norm{\pib}_2\ge\norm{\pib}_1/\sqrt n=1/\sqrt n$. \hfill$\square$
 
-La igualdad se alcanza casi exactamente en la pr\'actica (Secci\'on~\ref{sec:espectro}), as\'i que $\sigma_{\min}\approx(1-\alpha)/\sqrt{1+n\,\mathrm{Var}(\pi)\!\cdot\! n}$
-depende de qu\'e tan concentrado est\'e el PageRank en pocos nodos: cuanto m\'as hubs, menor $\sigma_{\min}$ y mayor $\kappa_2$.
-Adem\'as $M_\alpha^\top\e=(1-\alpha)\e$, de modo que $\e/\sqrt n$ es casi el vector singular izquierdo $\mathbf u_n$; como
-$\bb\propto\e$, el producto $\mathbf u_i^\top\bb$ es casi nulo salvo para $i=n$ y $\bx\approx\sigma_n^{-1}\mathbf v_n(\mathbf u_n^\top\bb)$.
-Truncar quitando los $\sigma$ \emph{peque\~nos} elimina entonces casi toda la soluci\'on, y por eso $k$ debe ser casi $n$ en modo LM,
-mientras que en modo SM basta $k=1$.
+En los experimentos esta cota se cumple casi con igualdad (Secci\'on~\ref{sec:espectro}). Eso significa que $\sigma_{\min}\approx(1-\alpha)/\sqrt{1+n^2\,\mathrm{Var}(\pi)}$ depende directo de qu\'e tan concentrado est\'e el PageRank: mientras m\'as hubs haya, m\'as chico es $\sigma_{\min}$ y m\'as grande $\kappa_2$. Adem\'as, como $M_\alpha^\top\e=(1-\alpha)\e$, el vector $\e/\sqrt n$ queda casi pegado al \'ultimo vector singular izquierdo $\mathbf u_n$. Dado que $\bb$ es proporcional a $\e$, el producto $\mathbf u_i^\top\bb$ es casi cero para todo $i<n$ y la soluci\'on queda dominada por $\sigma_n^{-1}\mathbf v_n(\mathbf u_n^\top\bb)$. Por eso descartar los valores singulares peque\~nos (modo LM) borra casi toda la respuesta y obliga a usar $k\approx n$, mientras que en modo SM basta $k=1$.
 
 %---------------------------------------------------------------------
 \section{Dise\~no experimental}
-\textbf{Grafos.} ER dirigido (grado medio 6) y BA (par\'ametro $m=3$) con aristas orientadas al azar, $n\in\{100,500,1000,2000,5000\}$, con y sin nodos
-sin salida (5\,\% de los nodos cuando se piden). Grafo real: subgrafo de \code{web-Stanford} (281\,903 nodos, 2\,312\,497 aristas, grado medio 8.20,
-$|D|=172$); el BFS desde el nodo de mayor grado resultaba demasiado ralo (grado medio 1.98 con $n=5000$), por lo que se us\'o un BFS desde un nodo de grado medio.
-$S$ se construye siempre completa (con las columnas $\frac1n\e$) en formato disperso y denso, de modo que los cuatro m\'etodos resuelven la misma matriz.
+Trabajamos con grafos sint\'eticos Erd\H{o}s--R\'enyi dirigidos (grado medio 6) y Barab\'asi--Albert ($m=3$, aristas orientadas al azar) para $n\in\{100,500,1000,2000,5000\}$, tanto sin nodos sin salida como forzando un 5\,\% de ellos. Como grafo real usamos \code{web-Stanford} (281\,903 nodos, 2\,312\,497 aristas, grado medio 8.20 y $|D|=172$). Al extraer subgrafos por BFS desde el nodo de mayor grado sal\'ian demasiado ralos (grado medio 1.98 en $n=5000$), as\'i que arrancamos el BFS desde un nodo de grado medio. En todos los casos construimos $S$ completa (con las columnas $\frac1n\e$) en formato disperso y denso para que los cuatro m\'etodos resuelvan exactamente la misma matriz.
 
-\textbf{Referencia.} $\pib_{\rm ref}$ es la potencia con $\mathrm{tol}=10^{-14}$ (error real acotado por $\frac{\alpha}{1-\alpha}\mathrm{tol}$); para $n\le2000$ coincide con \code{pinv} a $9.5\times10^{-15}$ en norma $L_1$.
-En (c)--(e) se usa adem\'as la soluci\'on directa \code{np.linalg.solve}, que coincide con la anterior a precisi\'on de m\'aquina.
+Como soluci\'on de referencia $\pib_{\rm ref}$ tomamos el m\'etodo de la potencia con $\mathrm{tol}=10^{-14}$ (cuyo error real est\'a acotado por $\frac{\alpha}{1-\alpha}\mathrm{tol}$). Para $n\le 2000$, esta referencia coincide con \code{pinv} hasta $9.5\times10^{-15}$ en norma $L_1$. En los incisos (c)--(e) tambi\'en usamos \code{np.linalg.solve}, que da el mismo resultado a precisi\'on de m\'aquina.
 
-\textbf{Medici\'on.} Tiempo: \code{time.perf\_counter}, promedio de 5 corridas, con las matrices ya construidas. Memoria: \code{tracemalloc} en una corrida aparte;
-no ve el espacio de trabajo interno de LAPACK/ARPACK, por lo que es una cota inferior. Para $n=5000$ se omiten \code{pinv} y la SVD densa.
-Robustez: 10 semillas ($0$--$9$), $n\in\{100,500,1000\}$, $\alpha\in\{0.85,0.99\}$, perturbando el 1\,\% de las aristas (la mitad eliminadas, la mitad nuevas).
-Todo el c\'odigo y los CSV est\'an en el repositorio; el diagn\'ostico espectral y la ley de decaimiento salen de \code{p1\_diagnostico\_espectral.py} y \code{p1\_ley\_sm.py}.
+Los tiempos se midieron con \code{time.perf\_counter} promediando 5 corridas sobre las matrices ya armadas. Para memoria usamos \code{tracemalloc} en una ejecuci\'on aparte; como esta herramienta no ve el espacio interno de LAPACK ni ARPACK, los valores son una cota inferior. En $n=5000$ omitimos \code{pinv} y la SVD densa por costo. Para robustez corrimos 10 semillas ($0$--$9$) con $n\in\{100,500,1000\}$ y $\alpha\in\{0.85,0.99\}$, perturbando el 1\,\% de las aristas (mitad borradas, mitad agregadas). Todo el c\'odigo y los CSV est\'an en el repositorio, incluidos \code{p1\_diagnostico\_espectral.py} y \code{p1\_ley\_sm.py}.
 
 %---------------------------------------------------------------------
 \section{Resultados}
 \subsection{Validaci\'on}
-Con $\alpha=0.85$, $\mathrm{tol}=10^{-12}$ y $k=n$, la potencia (expl\'icita e impl\'icita), \code{pinv} y la pseudoinversa truncada coinciden en $L_1$ por debajo de $10^{-8}$
-(10/10 pruebas, incluidos nodo aislado, varios nodos sin salida, ciclo puro, ciclo con cuerda y grafo desconectado).
-Si $k<n$, $\pib_k$ puede tener entradas negativas y suma distinta de 1; se normaliza con $\norm{\cdot}_1$ como pide el enunciado.
+Con $\alpha=0.85$, $\mathrm{tol}=10^{-12}$ y $k=n$, la potencia (expl\'icita e impl\'icita), \code{pinv} y la pseudoinversa truncada coinciden en norma $L_1$ por debajo de $10^{-8}$ en las 10 pruebas unitarias (que incluyen nodo aislado, varios nodos sin salida, ciclo puro, ciclo con cuerda y grafo desconectado). Cuando $k<n$, $\pib_k$ puede salir con entradas negativas y suma distinta de 1, as\'i que se normaliza con $\norm{\cdot}_1$ tal como indica el enunciado.
 
 \subsection{Espectro y condicionamiento}\label{sec:espectro}
 \begin{table}[!htbp]
 \centering\small\setlength{\tabcolsep}{5pt}
-\begin{tabular}{@{}ccccccc@{}}
+\begin{tabular}{@{}cccccccc@{}}
 \toprule
- & $1-\alpha$ & \multicolumn{2}{c}{ER} & \multicolumn{2}{c}{BA}\\
- $\alpha$ && $\sigma_{\min}$ & $\kappa_2$ & $\sigma_{\min}$ & $\kappa_2$\\
+ & & \multicolumn{2}{c}{ER} & \multicolumn{2}{c}{BA} & \multicolumn{2}{c}{SNAP}\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(l){7-8}
+ $\alpha$ & $1-\alpha$ & $\sigma_{\min}$ & $\kappa_2$ & $\sigma_{\min}$ & $\kappa_2$ & $\sigma_{\min}$ & $\kappa_2$\\
 \midrule
-0.5   & 0.5   & 0.481 & 2.9    & 0.396 & 4.8\\
-0.85  & 0.15  & 0.138 & 12.5   & 0.102 & 26.7\\
-0.95  & 0.05  & 0.045 & 40.5   & 0.032 & 92.1\\
-0.99  & 0.01  & 0.0090& 208.7  & 0.0063& 487.4\\
-0.999 & 0.001 & 0.0009& 2101.8 & 0.0006& 4937.4\\
+0.5   & 0.5   & 0.482                 & 3.0                 & 0.395                 & 4.7                 & 0.176                 & 16.9\\
+0.85  & 0.15  & 0.139                 & 13.0                & 0.101                 & 25.7                & 0.0338                & 141.6\\
+0.95  & 0.05  & 0.0453                & 42.1                & 0.0318                & 88.8                & 0.0102                & 520.5\\
+0.99  & 0.01  & 0.00898               & 217                 & 0.00620               & 470                 & 0.00197               & 2808\\
+0.999 & 0.001 & $8.96\times10^{-4}$   & 2185                & $6.17\times10^{-4}$   & 4759                & $1.96\times10^{-4}$   & $2.86\times10^{4}$\\
+1     & 0     & $6.9\times10^{-18}$   & $2.8\times10^{17}$  & $1.2\times10^{-17}$   & $2.4\times10^{17}$  & $3.4\times10^{-16}$   & $1.6\times10^{16}$\\
 \bottomrule
 \end{tabular}
-\caption{$\sigma_{\min}$ y $\kappa_2(M_\alpha)$ ($n=200$, sin nodos sin salida). \todo{reemplazar por $n=500$ desde \code{resultados/p2/c\_tabla.csv}}}
+\caption{$\sigma_{\min}$ y $\kappa_2(M_\alpha)$ con $n=500$ (sin nodos sin salida; las variantes con 5\,\% de nodos sin salida difieren en menos de un 6\,\%). Datos: \code{resultados/p2/c_tabla.csv}.}
 \label{tab:kappa}
 \end{table}
-$\sigma_{\min}$ baja como $(1-\alpha)$ y $\kappa_2\approx c/(1-\alpha)$, con $c\approx2$ (ER) y $c\approx5$ (BA): el condicionamiento crece linealmente en $1/(1-\alpha)$
-y la constante depende del grafo. Con tolerancias $10^{-4}$, $10^{-8}$ y $10^{-12}$ el rango num\'erico es $n$ en todos los casos ($\kappa_2<10^4$); \todo{rangos con tolerancias
-mayores ($10^{-1},10^{-2},10^{-3}$) y caso $\alpha=1$, cuando la Persona 2 los agregue}.
+
+En la Tabla~\ref{tab:kappa} se ve que $\sigma_{\min}$ baja como $(1-\alpha)$ y $\kappa_2$ crece linealmente en $1/(1-\alpha)$, con constante $c\approx 2.2$ en ER, $4.7$ en BA y $28$ en SNAP.
+
+Si definimos el rango num\'erico como $\#\{i:\sigma_i>\mathrm{tol}\cdot\sigma_1\}$, para $\alpha<1$ el rango cae de $n$ a $n-1$ justo cuando $\mathrm{tol}>1/\kappa_2$. Con $\mathrm{tol}=10^{-8}$ y $10^{-12}$ sigue siendo $n=500$ en todos los grafos. Con $10^{-4}$ solo SNAP en $\alpha=0.999$ ($\kappa_2=2.9\times10^4$) pierde $\sigma_n$; con $10^{-3}$ lo pierden todos los casos con $\kappa_2>10^3$; con $10^{-2}$ los de $\kappa_2>10^2$; y con $10^{-1}$ casi todos, salvo $\alpha=0.5$ en ER y BA. Tanto en ER como en SNAP se pierde siempre un \'unico valor singular porque $\sigma_n$ est\'a bien separado del resto. BA se comporta distinto: con $\mathrm{tol}=10^{-1}$ y $\alpha=0.999$ el rango baja hasta 489, con 11 valores singulares por debajo de $0.1\,\sigma_1$. En el l\'imite $\alpha=1$, $\sigma_{\min}$ cae a ruido num\'erico ($10^{-17}$--$10^{-16}$), $\kappa_2$ sube a $10^{16}$--$10^{17}$ y el rango queda en $n-1$ para toda tolerancia (489--499 en BA con $10^{-1}$). Como $M_1=I-S$ es singular ($\e^\top M_1=\mathbf 0^\top$) y $\bb=\mathbf 0$, \code{pinv} devuelve $\bx=\mathbf 0$ y el PageRank solo se puede recuperar desde el espacio nulo ($\approx\mathbf v_n$).
 
 \begin{table}[!htbp]
 \centering\small\setlength{\tabcolsep}{5pt}
@@ -171,9 +130,8 @@ SNAP & 0.99  & 0.109 & 0.109 & 10\,116 & 1.0000 & 1.0000\\
 \caption{Verificaci\'on de la Proposici\'on ($n=2000$, $\alpha=0.99$): la cota se cumple hasta tres cifras y la alineaci\'on de $\mathbf u_n$ y $\mathbf v_n$ es pr\'acticamente exacta. Con $\alpha=0.999$, $\kappa_2$ alcanza $2106$ (ER), $7995$ (BA) y $102\,831$ (SNAP). Datos: \code{p1\_diagnostico\_espectral.py}.}
 \label{tab:cota}
 \end{table}
-La Tabla~\ref{tab:cota} muestra que $\sigma_{\min}/(1-\alpha)$ coincide con $1/(\sqrt n\norm{\pib}_2)$ hasta tres cifras. En SNAP el cociente es $0.11$ (frente a $0.90$ en ER),
-lo que indica un PageRank muy concentrado: $\sqrt n\norm{\pib}_2\approx 9$. El segundo valor singular m\'as peque\~no es $0.67$ en SNAP y $0.38$ en ER, as\'i que $\sigma_n$
-est\'a bien aislado en ambos casos.
+
+La Tabla~\ref{tab:cota} confirma que $\sigma_{\min}/(1-\alpha)$ coincide con $1/(\sqrt n\norm{\pib}_2)$ hasta la tercera cifra decimal. En SNAP ese cociente es $0.109$ frente a $0.898$ en ER, lo que refleja un PageRank muy concentrado ($\sqrt n\norm{\pib}_2\approx 9$). Como el segundo valor singular m\'as chico es $0.67$ en SNAP y $0.38$ en ER, $\sigma_n$ queda bastante aislado en ambos.
 
 \begin{figure}[!htbp]
 \centering
@@ -183,19 +141,42 @@ est\'a bien aislado en ambos casos.
 \end{figure}
 
 \subsection{Calidad del ranking y $k$ necesario}
-\textbf{LM falla, SM funciona.} Con $n=1000$ y 10 semillas, la truncaci\'on LM con $k=20$ da un error $L_1$ de $1.42$--$1.49$ (el m\'aximo posible entre dos distribuciones es 2),
-tanto con la SVD densa como con \code{svds}; el modo SM con $k=1$ da $10^{-2}$ ($\alpha=0.85$) y $10^{-4}$--$10^{-5}$ ($\alpha=0.99$) (Tabla~\ref{tab:g-l1}).
-En la tabla de la Persona 2 ($n=100,200$), el menor $k$ con $\tau>0.95$ es $n$ en modo LM en todos los casos y $k=1$ en modo SM para $\alpha\ge0.85$;
-para $\alpha=0.5$ el modo SM necesita entre $0.74\,n$ y $0.96\,n$. \todo{tabla final de $k_{\min}$ hasta $n=2000$ con $\alpha=0.6,0.7,0.8$ y $\tau$, precisi\'on@$m$; dependencia de $n$, $\alpha$ y Gini de grados}
+Con $n=1000$ y 10 semillas, truncar en modo LM con $k=20$ produce un error $L_1$ de $1.42$--$1.49$ (sobre un m\'aximo posible de 2 entre distribuciones), tanto con SVD densa como con \code{svds}. En cambio, el modo SM con $k=1$ baja el error a $10^{-2}$ en $\alpha=0.85$ y a $10^{-4}$--$10^{-5}$ en $\alpha=0.99$ (Tabla~\ref{tab:g-l1}). Al mirar la curva completa en $n=1000$ (Figura~\ref{fig:k}, izquierda), el error de LM apenas se mueve de $1.80$ ($k=1$) a $1.29$ ($k=889$) y reci\'en cae a $10^{-15}$ cuando $k=n$. Su $\tau$ de Kendall es negativa para todo $k<n$ (entre $-0.11$ y $-0.48$), la precisi\'on@10 es 0, la precisi\'on@50 no pasa de $0.06$ y la precisi\'on@100 llega a $0.13$: en la pr\'actica deja el ranking al rev\'es. Con SM pasa lo contrario: el error baja de $2.4\times10^{-4}$ ($k=1$) a $7.7\times10^{-6}$ ($k=889$), manteniendo $\tau\ge 0.9998$ y precisi\'on@10, @50 y @100 iguales a 1 para todo $k$.
 
-\textbf{Ley de decaimiento.} Para $\alpha\in\{0.85,0.95,0.99,0.999\}$, el ajuste de $\log e$ contra $\log(1-\alpha)$ (error $L_1$ de SM con $k=1$) da pendiente
-$1.94\pm0.004$ (ER) y $1.94\pm0.007$ (BA), con $n=500,1000$ y 10 semillas (\code{p1\_ley\_sm.py}): el error cae como $(1-\alpha)^{1.94}$. Aumentar $k$ de 1 a 5 casi no lo mejora.
+La Tabla~\ref{tab:kmin} muestra el menor $k$ necesario para lograr $\tau>0.95$ en 160 configuraciones (5 tipos de grafo, $n\in\{100,500,1000,2000\}$ y 8 valores de $\alpha$). En modo LM se necesita $k_{\min}=n$ siempre. En modo SM basta $k_{\min}=1$ en los 80 casos con $\alpha\ge 0.85$, y las diferencias aparecen reci\'en cuando $\alpha\le 0.8$:
+\begin{itemize}\setlength{\itemsep}{2pt}
+ \item El umbral desde donde alcanza $k=1$ es $\alpha=0.7$ en ER, $\alpha=0.85$ en BA ($0.8$ en $n=100$) y $\alpha=0.6$ en SNAP. En $\alpha=0.5$, ER pide entre $0.77\,n$ y $0.92\,n$, y BA entre $0.89\,n$ y $0.96\,n$.
+ \item Cuando $k_{\min}>1$, el valor crece con $n$. En $\alpha=0.5$ (ER y BA) y en $\alpha=0.7$ para BA ($\approx 0.13\,n$) la fracci\'on $k_{\min}/n$ se mantiene casi fija; en $\alpha=0.6$ para ER sube de $0.02\,n$ a $0.15\,n$ al pasar de $n=100$ a $2000$, y en $\alpha=0.8$ para BA pasa de 1 a 28.
+ \item La relaci\'on con el \'indice de Gini no es directa: BA (Gini $\approx 0.45$) requiere m\'as $k$ que ER (Gini $\approx 0.22$), pero SNAP (Gini $0.84$--$0.99$) se resuelve con $k\le 3$ incluso en $\alpha=0.5$. Lo que manda es qu\'e tan aislado est\'a $\sigma_n$. En BA hay varios valores singulares chicos pegados a $\sigma_n$, mientras que en ER y SNAP $\sigma_n$ queda solo (en SNAP, $\sigma_n/(1-\alpha)=0.35$ con $\alpha=0.5$, frente a $0.96$ en ER y $0.79$ en BA).
+ \item Aun cuando $\tau>0.95$ en $k_{\min}$, la precisi\'on@10 oscila entre $0.8$ y $1$, la precisi\'on@50 entre $0.9$ y $1$ y la precisi\'on@100 entre $0.93$ y $1$ (media $0.99$). Tener buena correlaci\'on global no asegura clavar el top-10 exacto.
+\end{itemize}
+
+\begin{table}[!htbp]
+\centering\scriptsize\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Grafo & Gini (grado de entrada) & $\alpha=0.5$ & $\alpha=0.6$ & $\alpha=0.7$ & $\alpha=0.8$\\
+\midrule
+ER              & 0.21--0.23 & 78 / 387 / 782 / 1539  & 2 / 34 / 171 / 299   & 1 / 1 / 1 / 1        & 1 / 1 / 1 / 1\\
+ER sin salida   & 0.21--0.23 & 92 / 399 / 780 / 1532  & 7 / 36 / 74 / 230    & 1 / 1 / 1 / 1        & 1 / 1 / 1 / 1\\
+BA              & 0.44--0.46 & 89 / 457 / 935 / 1848  & 22 / 166 / 285 / 650 & 12 / 69 / 128 / 262  & 1 / 5 / 15 / 28\\
+BA sin salida   & 0.45--0.46 & 92 / 478 / 958 / 1920  & 26 / 144 / 297 / 629 & 11 / 62 / 135 / 262  & 1 / 1 / 10 / 21\\
+SNAP            & 0.84--0.99 & 3 / 1 / 2 / 2          & 1 / 1 / 1 / 1        & 1 / 1 / 1 / 1        & 1 / 1 / 1 / 1\\
+\bottomrule
+\end{tabular}
+\caption{$k_{\min}$ en modo SM ($\tau>0.95$) para $n=100/500/1000/2000$. Para $\alpha\in\{0.85,0.95,0.99,0.999\}$ es $k_{\min}=1$ en todos los casos; en modo LM, $k_{\min}=n$ siempre.
+Datos: \code{resultados/p2/d_kmin_tabla.csv}.}
+\label{tab:kmin}
+\end{table}
+
+Si ajustamos $\log e$ contra $\log(1-\alpha)$ para el error $L_1$ de SM con $k=1$ en $\alpha\in\{0.85,0.95,0.99,0.999\}$ ($n=500,1000$, 10 semillas, \code{p1\_ley\_sm.py}), sale una pendiente de $1.94\pm0.004$ en ER y $1.94\pm0.007$ en BA. El error cae aproximadamente como $(1-\alpha)^{1.94}$, y subir $k$ de 1 a 5 casi no cambia nada.
 
 \begin{figure}[!htbp]
 \centering
 \begin{subfigure}{0.49\linewidth}\centering\img{resultados/p2/d_error_vs_k.png}{\linewidth}{4.8cm}\end{subfigure}\hfill
 \begin{subfigure}{0.49\linewidth}\centering\img{resultados/p2/d_kmin_escala.png}{\linewidth}{4.8cm}\end{subfigure}
-\caption{Izquierda: error $L_1$, $\tau$ y precisi\'on@$m$ vs.\ $k$. Derecha: $k_{\min}$ ($\tau>0.95$) vs.\ $\alpha$ y vs.\ $n$.}
+\caption{Izquierda: error $L_1$, $\tau$ y precisi\'on@$m$ vs.\ $k$ ($n=1000$). Derecha: $k_{\min}$ ($\tau>0.95$) vs.\ $\alpha$ y vs.\ $n$.}
+\label{fig:k}
 \end{figure}
 
 \subsection{Rendimiento}
@@ -214,11 +195,10 @@ $1.94\pm0.004$ (ER) y $1.94\pm0.007$ (BA), con $n=500,1000$ y 10 semillas (\code
 \caption{Potencia con $n=5000$ ($\mathrm{tol}=10^{-12}$): iteraciones observadas frente a la cota de peor caso, y tiempo con $S$ expl\'icita / impl\'icita.}
 \label{tab:iters}
 \end{table}
-\textbf{La explosi\'on de iteraciones depende de la estructura.} En ER y BA la potencia usa entre el 0.1\,\% y el 0.2\,\% de la cota con $\alpha=0.999$;
-en el subgrafo de SNAP usa el 61\,\% (16\,858 iteraciones, 3.3~s). La cota de peor caso se alcanza en grafos con estructura de comunidades, no en grafos aleatorios.
 
-\textbf{Memoria.} Con $n=5000$ y $\alpha=0.99$, la variante impl\'icita usa 21 veces menos memoria que la $S$ expl\'icita en ER (14.8 vs.\ 0.70~MB) y 39 veces en BA (19.3 vs.\ 0.50~MB);
-el factor crece con $n$ (ER: 1.1, 2.7, 4.8, 8.8, 21; BA: 1.4, 4.4, 9.0, 16.7, 39 para $n=100,\dots,5000$).
+El n\'umero de iteraciones de la potencia depende mucho de la estructura del grafo (Tabla~\ref{tab:iters}). En ER y BA con $\alpha=0.999$ usa apenas entre el 0.1\,\% y el 0.2\,\% de la cota te\'orica. En el subgrafo de SNAP, en cambio, consume el 61\,\% (16\,858 iteraciones, 3.3~s) porque la presencia de comunidades frena la convergencia.
+
+En memoria la diferencia entre las dos variantes de la potencia es grande. Con $n=5000$ y $\alpha=0.99$, la versi\'on impl\'icita ocupa 21 veces menos que la $S$ expl\'icita en ER (0.70 frente a 14.8~MB) y 39 veces menos en BA (0.50 frente a 19.3~MB). Y esa brecha se agranda con $n$: pasa de 1.1x a 21x en ER y de 1.4x a 39x en BA al ir de $n=100$ a $5000$.
 
 \begin{table}[!htbp]
 \centering\small\setlength{\tabcolsep}{6pt}
@@ -237,9 +217,8 @@ SVD densa LM ($k=20$)           & 2.2--2.9 & 2.4--2.9\\
 \caption{Exponente emp\'irico $p$ en $t\propto n^p$ (ajuste log--log, $n\ge500$; 4 puntos para los m\'etodos dispersos, 3 para los densos; rango entre corridas y valores de $\alpha$).}
 \label{tab:exp}
 \end{table}
-\textbf{Exponentes.} Los m\'etodos densos quedan entre 1.8 y 3.0: el valor te\'orico es 3, pero con solo 3 puntos ($n=500,1000,2000$), cach\'e y BLAS paralelo y tiempos que var\'ian entre corridas
-(una desviaci\'on est\'andar mayor que la media en una celda de la Tabla~\ref{tab:g-time}), no son concluyentes. La potencia expl\'icita escala como $n^{1.7\text{--}1.8}$, consistente con $\mathrm{nnz}(S)\sim n^2$; la impl\'icita
-queda en $n^{0.4\text{--}0.5}$, pero eso refleja el costo fijo de Python con $\sim$30 iteraciones y no un comportamiento asint\'otico.
+
+Los exponentes emp\'iricos de la Tabla~\ref{tab:exp} para los m\'etodos densos caen entre 1.8 y 3.0. Aunque la complejidad te\'orica es $O(n^3)$, con solo tres puntos ($n=500,1000,2000$), BLAS paralelo y ruido entre corridas (en la Tabla~\ref{tab:g-time} hay celdas con desviaci\'on mayor que la media), el ajuste no es concluyente. La potencia expl\'icita escala como $n^{1.7\text{--}1.8}$, acorde con $\mathrm{nnz}(S)\sim n^2$. La impl\'icita queda en $n^{0.4\text{--}0.5}$, pero eso refleja el costo fijo de Python en unas 30 iteraciones m\'as que su escalado asint\'otico real.
 
 \begin{figure}[!htbp]
 \centering
@@ -263,19 +242,10 @@ Potencia: error $L_1$ vs.\ ref.    & $4.8\times10^{-12}$ & $9.8\times10^{-11}$ &
 \end{tabular}
 \caption{Resultados en el subgrafo de \code{web-Stanford}. Con $\alpha=0.99$ y 0.999 la potencia es unas 25 y 4 veces m\'as r\'apida que \code{svds} SM.}
 \end{table}
-En el subgrafo de $n=5000$, el error de la potencia llega a su cota $\frac{\alpha}{1-\alpha}\mathrm{tol}$ (en ER/BA es $\sim10^{-13}$),
-y \code{svds} SM con $k=1$ resulta m\'as imprecisa ($0.275$ con $\alpha=0.85$; $6.6\times10^{-4}$ con $\alpha=0.999$) y lenta:
-ARPACK necesita 8--12~s frente a 0.02--0.06~s en ER/BA.
 
-Para evaluar tambi\'en los m\'etodos densos en el grafo real, se repiti\'o el experimento en subgrafos de $n=1000$ ($|E|=16\,196$, $|D|=1$)
-y $n=2000$ ($|E|=32\,532$, $|D|=1$). En ellos, \code{pinv} mantiene precisi\'on de m\'aquina ($\le1.0\times10^{-14}$ en $n=1000$ y
-$\le2.7\times10^{-14}$ en $n=2000$) con tiempos independientes de $\alpha$: $0.17$--$0.25$~s ($n=1000$) y $1.62$--$1.86$~s ($n=2000$,
-un factor $\sim8\times$ acorde con $O(n^3)$). Adem\'as, el diagn\'ostico espectral en $n=2000$ (Tabla~\ref{tab:cota}) muestra una alineaci\'on
-exacta ($|\mathbf u_n^\top\e/\sqrt n|=1.0000$, $|\mathbf v_n^\top\pib|/\norm{\pib}_2=1.0000$) y un $\sigma_{\min}$ muy aislado
-($0.00109$ frente a $\sigma_{n-1}=0.668$ en $\alpha=0.99$), por lo que la SVD truncada SM con $k=1$ logra errores de $5.9\times10^{-4}$
-($\alpha=0.85$), $2.8\times10^{-6}$ ($\alpha=0.99$) y $2.8\times10^{-8}$ ($\alpha=0.999$); subir $k$ a $2, 3$ o $5$ apenas modifica el error
-($1.9\times10^{-6}$--$2.2\times10^{-6}$ en $\alpha=0.99$). La diferencia frente a $n=5000$ refleja que los subgrafos no son id\'enticos ni
-representativos del grafo completo (grado medio $13.7$ y $16.3$ frente a $8.2$), por lo que sus cifras se reportan por separado.
+En el subgrafo de $n=5000$, el error de la potencia alcanza su cota $\frac{\alpha}{1-\alpha}\mathrm{tol}$ (mientras que en ER/BA ronda $10^{-13}$). Peor le va a \code{svds} SM con $k=1$: es bastante menos precisa ($0.275$ en $\alpha=0.85$ y $6.6\times10^{-4}$ en $\alpha=0.999$) y tarda entre 8 y 12 segundos en ARPACK frente a los 0.02--0.06~s que tomaba en ER y BA.
+
+Para probar los m\'etodos densos sobre el grafo real repetimos el experimento en subgrafos m\'as chicos: $n=1000$ ($|E|=16\,196$, $|D|=1$) y $n=2000$ ($|E|=32\,532$, $|D|=1$). Ah\'i \code{pinv} mantiene precisi\'on de m\'aquina ($\le 1.0\times10^{-14}$ en $n=1000$ y $\le 2.7\times10^{-14}$ en $n=2000$) sin que $\alpha$ afecte su tiempo: $0.17$--$0.25$~s en $n=1000$ y $1.62$--$1.86$~s en $n=2000$ (un salto de $\sim 8\times$, justo lo esperado para $O(n^3)$). En $n=2000$ (Tabla~\ref{tab:cota}), $\mathbf u_n$ y $\mathbf v_n$ se alinean a 1.0000 y $\sigma_{\min}=0.00109$ queda lejos de $\sigma_{n-1}=0.668$ ($\alpha=0.99$). Por eso la SVD truncada SM con $k=1$ logra errores de $5.9\times10^{-4}$ ($\alpha=0.85$), $2.8\times10^{-6}$ ($\alpha=0.99$) y $2.8\times10^{-8}$ ($\alpha=0.999$), y subir $k$ a 2, 3 o 5 casi no mueve la aguja ($1.9\times10^{-6}$--$2.2\times10^{-6}$ en $\alpha=0.99$). Reportamos cada tama\~no por separado porque estos subgrafos son m\'as densos que el grafo completo (grado medio $13.7$ y $16.3$ frente a $8.2$) y no son comparables entre s\'i.
 
 \subsection{Robustez ante semillas y perturbaciones}
 \begin{table}[!htbp]
@@ -314,9 +284,7 @@ SVD densa SM ($k=1$)   & 196 $\pm$ 5.4   & 196 $\pm$ 6.9   & 198 $\pm$ 30    & 3
 \label{tab:g-time}
 \end{table}
 
-\textbf{Sensibilidad.} Al perturbar el 1\,\% de las aristas, $\norm{\pib(G')-\pib(G)}_1$ (potencia, 10 semillas) vale entre $0.025$ y $0.046$:
-en ER, $2.5\times10^{-2}\pm2.8\times10^{-3}$ ($\alpha=0.85$) y $3.2\times10^{-2}\pm4.3\times10^{-3}$ ($\alpha=0.99$) con $n=1000$; en BA, $3.1\times10^{-2}\pm3.8\times10^{-3}$ y $4.4\times10^{-2}\pm7.5\times10^{-3}$.
-La sensibilidad crece con $\alpha$ (un 30--40\,\% al pasar de 0.85 a 0.99) y es mayor en BA que en ER; con $n=100$ la dispersi\'on entre semillas es $\sim$5 veces mayor.
+Al perturbar el 1\,\% de las aristas (10 semillas, potencia), $\norm{\pib(G')-\pib(G)}_1$ se mueve entre $0.025$ y $0.046$. En $n=1000$ da $2.5\times10^{-2}\pm2.8\times10^{-3}$ ($\alpha=0.85$) y $3.2\times10^{-2}\pm4.3\times10^{-3}$ ($\alpha=0.99$) para ER; en BA sube a $3.1\times10^{-2}\pm3.8\times10^{-3}$ y $4.4\times10^{-2}\pm7.5\times10^{-3}$. Pasar de $\alpha=0.85$ a $0.99$ aumenta la sensibilidad entre un 30\,\% y un 40\,\%, y el efecto siempre es mayor en BA que en ER. Con $n=100$ la dispersi\'on entre semillas es unas 5 veces m\'as grande.
 
 \begin{figure}[!htbp]
 \centering
@@ -325,8 +293,11 @@ La sensibilidad crece con $\alpha$ (un 30--40\,\% al pasar de 0.85 a 0.99) y es 
 \end{figure}
 
 \subsection{An\'alisis por nodo}
-\todo{Escribir con \code{resultados/p2/e\_resumen\_categorias.csv} y \code{e\_nodos.csv}, corriendo \code{nodos.py --which SM} (y con \code{--snap}): qu\'e nodos pesan m\'as en los \'ultimos
-vectores singulares (sin salida, bajo grado, puentes, hubs), correlaci\'on de Spearman con grado, y cu\'antas posiciones cambian al truncar (modo LM vs.\ SM).}
+Corrimos \code{nodos.py --which SM --snap} ($k=n/10=50$) sobre el subgrafo de \code{web-Stanford} de $n=500$ con $\alpha=0.99$. Es un grafo muy concentrado (Gini de grado de entrada $0.97$): 474 de los 500 nodos tienen grado de entrada 0 y empatan en el PageRank m\'inimo, $\pi_i=1.387\times10^{-4}$. La Tabla~\ref{tab:cat} resume el peso de cada categor\'ia en los 20 \'ultimos vectores singulares derechos (\code{--vectors 20}), medido como la norma de la fila de cada nodo dividida por el promedio global (1 equivale al promedio). Las categor\'ias pueden solaparse: \emph{sin salida} (grado de salida 0), \emph{bajo grado} (grado total $\le$ percentil 25), \emph{puente} (extremo de una arista puente en el grafo no dirigido) y \emph{hub} (grado de entrada $\ge$ percentil 95).
+
+En los \'ultimos $\mathbf v_i$, el nodo sin salida pesa 6.8 veces el promedio y los hubs 4.3 veces, mientras que los nodos de bajo grado quedan en $0.81$. Esto encaja con la Secci\'on~\ref{sec:espectro}: como $\mathbf v_n$ coincide con $\pib$ ($|\mathbf v_n^\top\pib|/\norm{\pib}_2=1.0000$), ah\'i dominan los nodos que concentran masa (los hubs y el nodo sin salida que la redistribuye), y los otros 19 vectores reparten el resto entre los de bajo grado.
+
+Con la truncaci\'on SM el ranking casi ni se altera. El error absoluto medio es $\sim 10^{-7}$ en hubs y en el nodo sin salida, y $6\times10^{-9}$ en los de bajo grado; el cambio medio de posici\'on es 0 (sin salida), $0.08$ (hubs) y $0.5$ (bajo grado). El \'unico salto llamativo es el del nodo 277 (grado de entrada 0, salida 20), que pasa del puesto 263 al 26 porque su $\pi$ aproximado es $1.388\times10^{-4}$ frente a $1.387\times10^{-4}$, y esa diferencia de $10^{-7}$ alcanza para sacarlo del empate masivo de nodos con grado de entrada 0. Es simplemente un desempate. Fuera de ese caso, el \'unico cambio entre los 15 nodos con mayor variaci\'on es el nodo 340 ($22\to 21$). En modo LM pasa todo lo contrario: con $\tau<0$ y precisi\'on@50 $\le 0.06$ para todo $k<n$ (Figura~\ref{fig:k}), el ranking entero se desordena, incluidos los hubs.
 
 \begin{table}[!htbp]
 \centering\small\setlength{\tabcolsep}{5pt}
@@ -334,13 +305,15 @@ vectores singulares (sin salida, bajo grado, puentes, hubs), correlaci\'on de Sp
 \toprule
 Categor\'ia & Nodos & Peso medio relativo & $|\pi_i-(\pi_k)_i|$ medio & $|\Delta\text{posici\'on}|$ medio\\
 \midrule
-Sin salida & \todo{} & \todo{} & \todo{} & \todo{}\\
-Bajo grado & \todo{} & \todo{} & \todo{} & \todo{}\\
-Puentes & \todo{} & \todo{} & \todo{} & \todo{}\\
-Hubs (top 5\,\% grado de entrada) & \todo{} & \todo{} & \todo{} & \todo{}\\
+Sin salida                        & 1   & 6.84 & $1.1\times10^{-7}$ & 0\\
+Bajo grado                        & 474 & 0.81 & $6.3\times10^{-9}$ & 0.5\\
+Puentes                           & 0   & --   & --                 & --\\
+Hubs (top 5\,\% grado de entrada) & 25  & 4.33 & $1.2\times10^{-7}$ & 0.08\\
 \bottomrule
 \end{tabular}
-\caption{Peso en los \'ultimos $\mathbf v_i$ por categor\'ia de nodo.}
+\caption{Peso en los \'ultimos $\mathbf v_i$ por categor\'ia de nodo (subgrafo SNAP, $n=500$, $\alpha=0.99$, truncaci\'on SM con $k=50$, 20 \'ultimos vectores). Ning\'un nodo es extremo de una arista puente.
+Datos: \code{resultados/p2/e_resumen_categorias.csv} y \code{e_nodos.csv}.}
+\label{tab:cat}
 \end{table}
 
 \begin{figure}[!htbp]
@@ -351,7 +324,9 @@ Hubs (top 5\,\% grado de entrada) & \todo{} & \todo{} & \todo{} & \todo{}\\
 \end{figure}
 
 %---------------------------------------------------------------------
+\FloatBarrier
 \section{Conclusiones}
+
 \begin{table}[!htbp]
 \centering\small\setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}p{3.6cm}p{3.4cm}p{8.2cm}@{}}
@@ -367,24 +342,27 @@ Grafo real (SNAP), $\alpha\to1$
 $n\lesssim2000$, se necesita valor exacto o el espectro
  & \code{pinv} / SVD densa
  & $\sim0.2$--0.4~s con $n=1000$, tiempo entre $n^2$ y $n^3$; da $\sigma_i$ y $\kappa_2$.\\
-Estudiar estructura, $\alpha$ alto, grafos aleatorios
- & SVD truncada SM, $k$ peque\~no
+An\'alisis espectral, $\alpha$ alto, grafos aleatorios
+ & SVD truncada SM ($k$ peque\~no)
  & $k=1$ con error $\sim(1-\alpha)^{1.94}$; no es m\'as r\'apida que la potencia.\\
 Truncaci\'on cl\'asica (LM)
  & Evitar
  & Error 1.4--1.85 con $k=20$; $k_{\min}=n$ para $\tau>0.95$.\\
 \bottomrule
 \end{tabular}
-\caption{Qu\'e m\'etodo conviene en cada r\'egimen.}
+\caption{Resumen de m\'etodos recomendados seg\'un el r\'egimen.}
 \end{table}
 
-\textbf{Respuesta a la pregunta central.} Cuando $\alpha\to1$, $\sigma_{\min}(M_\alpha)\to0$ como $(1-\alpha)/(\sqrt n\norm{\pib}_2)$ y $\kappa_2$ crece como $1/(1-\alpha)$,
-con una constante que depende de qu\'e tan concentrado est\'e el PageRank. En grafos aleatorios, la potencia ofrece el mejor compromiso; en el grafo real sigue siendo la mejor opci\'on, aunque necesita
-muchas m\'as iteraciones. La pseudoinversa truncada solo sirve si se conserva el valor singular m\'as peque\~no: con los $k$ mayores el ranking se pierde hasta $k=n$.
-El truncamiento reordena nodos importantes: \todo{completar con el inciso (e): qu\'e categor\'ias cambian de posici\'on en LM y en SM}.
+\subsection{Mar\'ia Bel\'en Calle Pinto}
+La variante impl\'icita de la potencia es la opci\'on m\'as pr\'actica incluso cuando $\alpha\to 1$: ahorra entre 21 y 39 veces m\'as memoria que la matriz $S$ expl\'icita, y aunque en \code{web-Stanford} las iteraciones se disparan a 16\,858 en $\alpha=0.999$, sigue siendo m\'as r\'apida y mucho m\'as precisa que \code{svds}. El espectro explica por qu\'e la truncaci\'on cl\'asica (LM) destruye el ranking para cualquier $k<n$ ($\tau<0$): casi toda la soluci\'on vive en $\sigma_{\min}$. Si en cambio se conservan los valores singulares menores (SM), basta $k=1$ para $\alpha\ge 0.85$ en todos los grafos probados, y para $\alpha\le 0.8$ el $k$ necesario depende de qu\'e tan aislado est\'e $\sigma_n$.
 
-\textbf{Limitaciones.} Los exponentes de los m\'etodos densos usan 3 puntos y son inestables entre corridas; (f) usa una sola semilla; el subgrafo de SNAP no es representativo del grafo completo;
-\code{tracemalloc} subestima la memoria de LAPACK/ARPACK; la ley $(1-\alpha)^{1.94}$ es emp\'irica (ER/BA, $n\le1000$), sin demostraci\'on.
+Quedan algunas limitaciones en las mediciones. Los exponentes emp\'iricos de los m\'etodos densos salen de solo tres tama\~nos ($n\le 2000$) y var\'ian entre corridas, \code{tracemalloc} no registra la memoria interna de LAPACK o ARPACK, y la ley $(1-\alpha)^{1.94}$ es emp\'irica en ER y BA. Adem\'as, los subgrafos de \code{web-Stanford} son m\'as densos que el grafo completo, y en el an\'alisis por nodo los empates de PageRank entre nodos sin enlaces entrantes exageran cualquier cambio m\'inimo de posici\'on.
+
+\subsection{Renato Oscar Corrales Pe\~na}
+Cuando $\alpha$ tiende a 1, el m\'etodo de la potencia da los mejores resultados en cuanto a tiempo, memoria y precisi\'on. En ER y BA con $n = 5000$ converge en 29 a 53 iteraciones y menos de 0.06~s, con un error cercano a $10^{-13}$. Mientras que \code{pinv} y SVD densa dan resultados exactos, pero por su costo su uso es limitado a aproximadamente 2000 nodos. La SVD truncada que mantiene los valores singulares m\'as grandes no es tan buena, porque la soluci\'on depende en su mayor\'ia del valor singular m\'as peque\~no.
+
+Por \'ultimo, la estructura del grafo es importante en el condicionamiento. Cuando la constante $c$ (en $\kappa_2 \approx c/(1-\alpha)$) es mayor, el PageRank se encuentra concentrado en pocos nodos, lo que hace que el problema est\'e peor condicionado cuando $\alpha$ se acerca a 1.
+\FloatBarrier
 
 \begin{thebibliography}{9}\small
 \bibitem{page} L.~Page, S.~Brin, R.~Motwani, T.~Winograd. \emph{The PageRank Citation Ranking: Bringing Order to the Web}. Stanford InfoLab, 1999.
